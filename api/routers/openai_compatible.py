@@ -123,9 +123,14 @@ def extract_language_from_model(model_name: str) -> Optional[str]:
         Language name if suffix found, None otherwise
     """
     # Check if model ends with a language code
+    # Only extract language if the model follows the expected pattern
     for lang_code, lang_name in LANGUAGE_CODE_MAPPING.items():
-        if model_name.endswith(f"-{lang_code}"):
-            return lang_name
+        suffix = f"-{lang_code}"
+        if model_name.endswith(suffix):
+            # Verify it's a valid language-specific model variant
+            # Should be either tts-1-{lang} or tts-1-hd-{lang}
+            if model_name == f"tts-1{suffix}" or model_name == f"tts-1-hd{suffix}":
+                return lang_name
     return None
 
 
