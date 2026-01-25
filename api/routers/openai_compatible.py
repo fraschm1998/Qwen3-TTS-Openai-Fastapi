@@ -17,23 +17,12 @@ from ..structures.schemas import OpenAISpeechRequest, ModelInfo, VoiceInfo
 from ..services.text_processing import normalize_text
 from ..services.audio_encoding import encode_audio, get_content_type, DEFAULT_SAMPLE_RATE
 
-# Optional librosa import for speed adjustment
-try:
-    import librosa
-    LIBROSA_AVAILABLE = True
-except ImportError:
-    LIBROSA_AVAILABLE = False
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
     tags=["OpenAI Compatible TTS"],
     responses={404: {"description": "Not found"}},
 )
-
-# Global TTS model instance (lazy loaded)
-_tts_model = None
-_tts_model_lock = None
 
 
 # Language code to language name mapping
@@ -134,47 +123,16 @@ def extract_language_from_model(model_name: str) -> Optional[str]:
     return None
 
 
-async def get_tts_model():
-    """Get the global TTS model instance, initializing if needed."""
-    global _tts_model, _tts_model_lock
-    import asyncio
+async def get_tts_backend():
+    """Get the TTS backend instance, initializing if needed."""
+    from ..backends import get_backend, initialize_backend
     
-    if _tts_model_lock is None:
-        _tts_model_lock = asyncio.Lock()
+    backend = get_backend()
     
-    if _tts_model is None:
-        async with _tts_model_lock:
-            if _tts_model is None:
-                try:
-                    import torch
-                    from qwen_tts import Qwen3TTSModel
-                    
-                    # Determine device
-                    if torch.cuda.is_available():
-                        device = "cuda:0"
-                        dtype = torch.bfloat16
-                    else:
-                        device = "cpu"
-                        dtype = torch.float32
-                    
-                    logger.info(f"Loading Qwen3-TTS model on {device}...")
-                    
-                    # Try to load the custom voice model first
-                    model_name = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
-                    
-                    _tts_model = Qwen3TTSModel.from_pretrained(
-                        model_name,
-                        device_map=device,
-                        dtype=dtype,
-                    )
-                    
-                    logger.info(f"Qwen3-TTS model loaded successfully on {device}")
-                    
-                except Exception as e:
-                    logger.error(f"Failed to load TTS model: {e}")
-                    raise RuntimeError(f"Failed to initialize TTS model: {e}")
+    if not backend.is_ready():
+        await initialize_backend()
     
-    return _tts_model
+    return backend
 
 
 def get_voice_name(voice: str) -> str:
@@ -194,7 +152,7 @@ async def generate_speech(
     speed: float = 1.0,
 ) -> tuple[np.ndarray, int]:
     """
-    Generate speech from text using Qwen3-TTS.
+    Generate speech from text using the configured TTS backend.
     
     Args:
         text: The text to synthesize
@@ -206,27 +164,20 @@ async def generate_speech(
     Returns:
         Tuple of (audio_array, sample_rate)
     """
-    tts_model = await get_tts_model()
+    backend = await get_tts_backend()
     
     # Map voice name
     voice_name = get_voice_name(voice)
     
-    # Generate speech
+    # Generate speech using the backend
     try:
-        wavs, sr = tts_model.generate_custom_voice(
+        audio, sr = await backend.generate_speech(
             text=text,
+            voice=voice_name,
             language=language,
-            speaker=voice_name,
             instruct=instruct,
+            speed=speed,
         )
-        
-        audio = wavs[0]
-        
-        # Apply speed adjustment if needed
-        if speed != 1.0 and LIBROSA_AVAILABLE:
-            audio = librosa.effects.time_stretch(audio.astype(np.float32), rate=speed)
-        elif speed != 1.0:
-            logger.warning("Speed adjustment requested but librosa not available")
         
         return audio, sr
         
@@ -364,23 +315,15 @@ async def list_voices():
     default_languages = ["English", "Chinese", "Japanese", "Korean", "German", "French", "Spanish", "Russian", "Portuguese", "Italian"]
     
     try:
-        tts_model = await get_tts_model()
+        backend = await get_tts_backend()
         
-        # Get supported speakers from the model
-        speakers = []
-        if hasattr(tts_model.model, 'get_supported_speakers'):
-            raw_speakers = tts_model.model.get_supported_speakers()
-            if raw_speakers:
-                speakers = list(raw_speakers)
+        # Get supported speakers from the backend
+        speakers = backend.get_supported_voices()
         
         # Get supported languages
-        languages = []
-        if hasattr(tts_model.model, 'get_supported_languages'):
-            raw_languages = tts_model.model.get_supported_languages()
-            if raw_languages:
-                languages = list(raw_languages)
+        languages = backend.get_supported_languages()
         
-        # Build voice list from model if available
+        # Build voice list from backend
         if speakers:
             voices = []
             for speaker in speakers:
@@ -399,8 +342,9 @@ async def list_voices():
             "languages": languages if languages else default_languages,
         }
         
-    except Exception:
-        # Return default voices if model is not loaded
+    except Exception as e:
+        logger.warning(f"Could not get voices from backend: {e}")
+        # Return default voices if backend is not loaded
         return {
             "voices": [v.model_dump() for v in default_voices] + [v.model_dump() for v in openai_voices],
             "languages": default_languages,

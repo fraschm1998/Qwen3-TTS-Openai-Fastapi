@@ -30,6 +30,10 @@ HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8880"))
 WORKERS = int(os.getenv("WORKERS", "1"))
 
+# Backend configuration
+TTS_BACKEND = os.getenv("TTS_BACKEND", "official")
+TTS_WARMUP_ON_START = os.getenv("TTS_WARMUP_ON_START", "false").lower() == "true"
+
 # CORS configuration
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
 
@@ -51,6 +55,7 @@ async def lifespan(app: FastAPI):
     ╚═╝└┴┘└─┘┘└┘╚═╝   ╩  ╩ ╚═╝
     
     OpenAI-Compatible TTS API
+    Backend: {TTS_BACKEND}
 
 {boundary}
 """
@@ -60,14 +65,21 @@ async def lifespan(app: FastAPI):
     logger.info(f"Web Interface: http://{HOST}:{PORT}/")
     logger.info(boundary)
     
-    # Pre-load the TTS model (optional, can be lazy loaded)
+    # Pre-load the TTS backend
     try:
-        from .routers.openai_compatible import get_tts_model
-        logger.info("Pre-loading TTS model...")
-        await get_tts_model()
-        logger.info("TTS model loaded successfully!")
+        from .backends import initialize_backend
+        logger.info(f"Initializing TTS backend: {TTS_BACKEND}")
+        backend = await initialize_backend(warmup=TTS_WARMUP_ON_START)
+        logger.info(f"TTS backend '{backend.get_backend_name()}' loaded successfully!")
+        logger.info(f"Model: {backend.get_model_id()}")
+        
+        device_info = backend.get_device_info()
+        if device_info.get("gpu_available"):
+            logger.info(f"GPU: {device_info.get('gpu_name')}")
+            logger.info(f"VRAM: {device_info.get('vram_total')}")
     except Exception as e:
-        logger.info(f"Note: Model will be loaded on first request. ({e})")
+        logger.warning(f"Backend initialization delayed: {e}")
+        logger.info("Backend will be loaded on first request.")
     
     yield
     
@@ -177,8 +189,40 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy"}
+    """Health check endpoint with backend information."""
+    try:
+        from .backends import get_backend
+        
+        backend = get_backend()
+        device_info = backend.get_device_info()
+        
+        return {
+            "status": "healthy" if backend.is_ready() else "initializing",
+            "backend": {
+                "name": backend.get_backend_name(),
+                "model_id": backend.get_model_id(),
+                "ready": backend.is_ready(),
+            },
+            "device": {
+                "type": device_info.get("device"),
+                "gpu_available": device_info.get("gpu_available"),
+                "gpu_name": device_info.get("gpu_name"),
+                "vram_total": device_info.get("vram_total"),
+                "vram_used": device_info.get("vram_used"),
+            },
+            "version": "0.1.0",
+        }
+    except Exception as e:
+        logger.error(f"Health check error: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "backend": {
+                "name": TTS_BACKEND,
+                "ready": False,
+            },
+            "version": "0.1.0",
+        }
 
 
 def main():
