@@ -1,19 +1,19 @@
 # Default host for benchmarks
 host := "localhost"
 
-# Start N replicas behind nginx (2 or 4)
+# Start N replicas behind nginx (1-4)
 run n="2":
     #!/usr/bin/env bash
     set -euo pipefail
     n={{n}}
-    if [[ "$n" != "2" && "$n" != "4" ]]; then
-        echo "Error: only 2 or 4 replicas supported"
+    if [[ "$n" -lt 1 || "$n" -gt 4 ]]; then
+        echo "Error: 1-4 replicas supported"
         exit 1
     fi
-    services="nginx qwen3-tts-1 qwen3-tts-2"
-    if [[ "$n" == "4" ]]; then
-        services="$services qwen3-tts-3 qwen3-tts-4"
-    fi
+    services="nginx"
+    for i in $(seq 1 "$n"); do
+        services="$services qwen3-tts-$i"
+    done
     docker compose up -d $services
 
 # Stop all containers
