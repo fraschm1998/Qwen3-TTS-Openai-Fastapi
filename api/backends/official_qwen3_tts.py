@@ -7,6 +7,7 @@ This backend uses the official Qwen3-TTS Python implementation
 from the qwen_tts package.
 """
 
+import asyncio
 import logging
 from typing import Optional, Tuple, List, Dict, Any
 import numpy as np
@@ -158,22 +159,25 @@ class OfficialQwen3TTSBackend(TTSBackend):
             await self.initialize()
         
         try:
-            # Generate speech
-            wavs, sr = self.model.generate_custom_voice(
+            # Run blocking GPU inference in a thread to keep the event loop free
+            wavs, sr = await asyncio.to_thread(
+                self.model.generate_custom_voice,
                 text=text,
                 language=language,
                 speaker=voice,
                 instruct=instruct,
             )
-            
+
             audio = wavs[0]
-            
+
             # Apply speed adjustment if needed
             if speed != 1.0 and LIBROSA_AVAILABLE:
-                audio = librosa.effects.time_stretch(audio.astype(np.float32), rate=speed)
+                audio = await asyncio.to_thread(
+                    librosa.effects.time_stretch, audio.astype(np.float32), rate=speed
+                )
             elif speed != 1.0:
                 logger.warning("Speed adjustment requested but librosa not available")
-            
+
             return audio, sr
             
         except Exception as e:
