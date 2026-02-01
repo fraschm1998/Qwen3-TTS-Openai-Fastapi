@@ -77,10 +77,10 @@ RUN pip install --no-cache-dir \
     torchaudio>=2.0.0 \
     --index-url https://download.pytorch.org/whl/cu121
 
-# Install the main package dependencies
+# Install the main package dependencies (versions match pyproject.toml)
 RUN pip install --no-cache-dir \
-    transformers>=4.40.0 \
-    accelerate>=1.0.0 \
+    transformers==4.57.3 \
+    accelerate==1.12.0 \
     librosa \
     soundfile \
     pydub \
@@ -93,7 +93,7 @@ RUN pip install --no-cache-dir \
 # Install FastAPI and server dependencies
 RUN pip install --no-cache-dir \
     fastapi>=0.109.0 \
-    uvicorn[standard]>=0.27.0 \
+    "uvicorn[standard]>=0.27.0" \
     python-multipart \
     pydantic>=2.0.0 \
     inflect \
@@ -166,10 +166,10 @@ RUN pip install --no-cache-dir \
 # Install vLLM (this may take a while)
 RUN pip install --no-cache-dir vllm>=0.4.0
 
-# Install the main package dependencies
+# Install the main package dependencies (versions match pyproject.toml)
 RUN pip install --no-cache-dir \
-    transformers>=4.40.0 \
-    accelerate>=1.0.0 \
+    transformers==4.57.3 \
+    accelerate==1.12.0 \
     librosa \
     soundfile \
     pydub \
@@ -182,7 +182,7 @@ RUN pip install --no-cache-dir \
 # Install FastAPI and server dependencies
 RUN pip install --no-cache-dir \
     fastapi>=0.109.0 \
-    uvicorn[standard]>=0.27.0 \
+    "uvicorn[standard]>=0.27.0" \
     python-multipart \
     pydantic>=2.0.0 \
     inflect \
@@ -264,19 +264,20 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
     torchaudio>=2.0.0 \
     --index-url https://download.pytorch.org/whl/cpu
 
-# Install Python dependencies
+# Install Python dependencies (versions match pyproject.toml)
 RUN pip install --no-cache-dir \
-    transformers>=4.40.0 \
-    accelerate>=1.0.0 \
+    transformers==4.57.3 \
+    accelerate==1.12.0 \
     librosa \
     soundfile \
     pydub \
     numpy \
     scipy \
     einops \
+    sox \
     onnxruntime \
     fastapi>=0.109.0 \
-    uvicorn[standard]>=0.27.0 \
+    "uvicorn[standard]>=0.27.0" \
     python-multipart \
     pydantic>=2.0.0 \
     inflect \
@@ -286,8 +287,8 @@ RUN pip install --no-cache-dir \
 # Copy application code
 COPY . .
 
-# Install the package
-RUN pip install --no-cache-dir -e .
+# Install the package (--no-deps to preserve CPU torch from above)
+RUN pip install --no-cache-dir --no-deps -e .
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash appuser \
