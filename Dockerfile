@@ -119,8 +119,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy application code
 COPY . .
 
-# Install the package in editable mode
-RUN pip install --no-cache-dir -e .
+# Install the package in editable mode (--no-deps to preserve CUDA torch from builder)
+RUN pip install --no-cache-dir --no-deps -e .
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash appuser \
@@ -204,8 +204,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy application code
 COPY . .
 
-# Install the package in editable mode with vllm extras
-RUN pip install --no-cache-dir -e ".[vllm]"
+# Install the package in editable mode (--no-deps to preserve CUDA torch from builder)
+RUN pip install --no-cache-dir --no-deps -e .
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash appuser \
