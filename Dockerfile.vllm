@@ -2,7 +2,7 @@
 # Uses official vLLM-Omni image (Python 3.12, CUDA, continuous batching)
 # See: https://docs.vllm.ai/projects/vllm-omni/en/latest/user_guide/examples/offline_inference/qwen3_tts/
 
-FROM vllm/vllm-omni:v0.14.0rc1
+FROM vllm/vllm-omni:v0.14.0
 
 WORKDIR /app
 
