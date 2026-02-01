@@ -157,7 +157,7 @@ class VLLMOmniQwen3TTSBackend(TTSBackend):
         try:
             # Build prompt and inputs following official vLLM-Omni example
             prompt = f"<|im_start|>assistant\n{text}<|im_end|>\n<|im_start|>assistant\n"
-            
+
             # Determine task type based on model
             if "CustomVoice" in self.model_name:
                 task_type = "CustomVoice"
@@ -165,7 +165,7 @@ class VLLMOmniQwen3TTSBackend(TTSBackend):
                 task_type = "VoiceDesign"
             else:
                 task_type = "Base"
-            
+
             inputs = {
                 "prompt": prompt,
                 "additional_information": {
@@ -177,34 +177,42 @@ class VLLMOmniQwen3TTSBackend(TTSBackend):
                     "max_new_tokens": [self.max_tokens],
                 },
             }
-            
-            # Generate using vLLM-Omni
-            omni_generator = self.omni.generate(inputs, self.sampling_params_list)
-            
-            # Process outputs
-            for stage_outputs in omni_generator:
-                for output in stage_outputs.request_output:
-                    # Extract audio from multimodal output
-                    audio_tensor = output.multimodal_output["audio"]
-                    sr = int(output.multimodal_output["sr"].item())
-                    
-                    # Convert to numpy
-                    audio_np = audio_tensor.float().detach().cpu().numpy()
-                    if audio_np.ndim > 1:
-                        audio_np = audio_np.flatten()
-                    
-                    # Apply speed adjustment if needed
-                    if speed != 1.0 and LIBROSA_AVAILABLE:
-                        audio_np = librosa.effects.time_stretch(
-                            audio_np.astype(np.float32), 
-                            rate=speed
-                        )
-                    elif speed != 1.0:
-                        logger.warning("Speed adjustment requested but librosa not available")
-                    
-                    return audio_np, sr
-            
-            raise RuntimeError("No audio returned from vLLM-Omni (no stage outputs)")
+
+            # Run blocking inference in a thread to keep the event loop free
+            audio_np, sr = await asyncio.to_thread(
+                self._generate_sync, inputs, speed
+            )
+            return audio_np, sr
+
+        except Exception as e:
+            logger.error(f"vLLM-Omni speech generation failed: {e}")
+            raise RuntimeError(f"vLLM-Omni speech generation failed: {e}")
+
+    def _generate_sync(
+        self, inputs: dict, speed: float
+    ) -> Tuple[np.ndarray, int]:
+        """Synchronous inference — runs in a thread via asyncio.to_thread."""
+        omni_generator = self.omni.generate(inputs, self.sampling_params_list)
+
+        for stage_outputs in omni_generator:
+            for output in stage_outputs.request_output:
+                audio_tensor = output.multimodal_output["audio"]
+                sr = int(output.multimodal_output["sr"].item())
+
+                audio_np = audio_tensor.float().detach().cpu().numpy()
+                if audio_np.ndim > 1:
+                    audio_np = audio_np.flatten()
+
+                if speed != 1.0 and LIBROSA_AVAILABLE:
+                    audio_np = librosa.effects.time_stretch(
+                        audio_np.astype(np.float32), rate=speed
+                    )
+                elif speed != 1.0:
+                    logger.warning("Speed adjustment requested but librosa not available")
+
+                return audio_np, sr
+
+        raise RuntimeError("No audio returned from vLLM-Omni (no stage outputs)")
             
         except Exception as e:
             logger.error(f"vLLM-Omni speech generation failed: {e}")
