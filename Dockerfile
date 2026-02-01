@@ -96,7 +96,8 @@ RUN pip install --no-cache-dir \
     python-multipart \
     pydantic>=2.0.0 \
     inflect \
-    aiofiles
+    aiofiles \
+    httpx>=0.24.0
 
 # Install ninja for faster flash-attn compilation
 RUN pip install --no-cache-dir ninja packaging wheel
@@ -183,7 +184,8 @@ RUN pip install --no-cache-dir \
     python-multipart \
     pydantic>=2.0.0 \
     inflect \
-    aiofiles
+    aiofiles \
+    httpx>=0.24.0
 
 # Optional: Install flash-attention for better performance
 RUN pip install --no-cache-dir flash-attn --no-build-isolation || true
@@ -276,7 +278,8 @@ RUN pip install --no-cache-dir \
     python-multipart \
     pydantic>=2.0.0 \
     inflect \
-    aiofiles
+    aiofiles \
+    httpx>=0.24.0
 
 # Copy application code
 COPY . .
