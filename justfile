@@ -10,6 +10,10 @@ run n="2":
         echo "Error: 1-4 replicas supported"
         exit 1
     fi
+    # Stop extra replicas that shouldn't be running
+    for i in $(seq $((n + 1)) 4); do
+        docker compose stop "qwen3-tts-$i" 2>/dev/null || true
+    done
     services="nginx"
     for i in $(seq 1 "$n"); do
         services="$services qwen3-tts-$i"
@@ -22,6 +26,7 @@ stop:
 
 # Rebuild and start N replicas
 rebuild n="2":
+    just stop
     docker compose build
     just run {{n}}
 
