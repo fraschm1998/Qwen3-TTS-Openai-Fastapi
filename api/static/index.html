@@ -408,6 +408,42 @@
             color: #ff3232;
             border: 1px solid #ff3232;
         }
+
+        /* Progress Bar */
+        .progress-container {
+            display: none;
+            margin-top: 15px;
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+        }
+
+        .progress-container.visible {
+            display: block;
+        }
+
+        .progress-text {
+            color: #888;
+            font-size: 13px;
+            margin-bottom: 10px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .progress-bar-track {
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00ff88, #00cc6a);
+            border-radius: 3px;
+            transition: width 0.3s ease;
+            width: 0%;
+            box-shadow: 0 0 8px rgba(0, 255, 136, 0.4);
+        }
     </style>
 </head>
 <body>
@@ -476,6 +512,13 @@
                     </button>
 
                     <div class="status" id="status"></div>
+
+                    <div class="progress-container" id="progressContainer">
+                        <div class="progress-text" id="progressText"></div>
+                        <div class="progress-bar-track">
+                            <div class="progress-bar-fill" id="progressBarFill"></div>
+                        </div>
+                    </div>
 
                     <div class="audio-container" id="audioContainer">
                         <audio id="audioPlayer" controls></audio>
@@ -647,65 +690,338 @@ response.<span class="function">stream_to_file</span>(<span class="string">"outp
     </div>
 
     <script>
+        // =====================================================================
+        // Parallel TTS constants
+        // =====================================================================
+        const CHUNK_SIZE = 500;
+        const MAX_CONCURRENCY = 4;
+        const SAMPLE_RATE = 24000;
+        const BITS_PER_SAMPLE = 16;
+        const NUM_CHANNELS = 1;
+        const RETRY_DELAY_MS = 500;
+        const MAX_RETRIES = 1;
+
+        // =====================================================================
+        // Text chunking (port of Python split_into_chunks)
+        // =====================================================================
+        function splitIntoChunks(text, maxChunkSize = CHUNK_SIZE) {
+            text = text.trim();
+            if (!text) return [];
+            if (text.length <= maxChunkSize) return [text];
+
+            const sentences = text.split(/(?<=[.!?;])\s+|\n\n+/);
+            const filtered = sentences.map(s => s.trim()).filter(s => s.length > 0);
+
+            const chunks = [];
+            let current = '';
+
+            for (const sentence of filtered) {
+                if (sentence.length > maxChunkSize) {
+                    if (current) { chunks.push(current.trim()); current = ''; }
+                    chunks.push(sentence.trim());
+                    continue;
+                }
+                const candidate = current ? current + ' ' + sentence : sentence;
+                if (candidate.length <= maxChunkSize) {
+                    current = candidate;
+                } else {
+                    if (current) chunks.push(current.trim());
+                    current = sentence;
+                }
+            }
+            if (current) chunks.push(current.trim());
+            return chunks;
+        }
+
+        // =====================================================================
+        // WAV utilities
+        // =====================================================================
+        function writeString(view, offset, str) {
+            for (let i = 0; i < str.length; i++) {
+                view.setUint8(offset + i, str.charCodeAt(i));
+            }
+        }
+
+        function createWavHeader(dataSize) {
+            const buffer = new ArrayBuffer(44);
+            const view = new DataView(buffer);
+            const bytesPerSample = BITS_PER_SAMPLE / 8;
+            const byteRate = SAMPLE_RATE * NUM_CHANNELS * bytesPerSample;
+            const blockAlign = NUM_CHANNELS * bytesPerSample;
+
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + dataSize, true);
+            writeString(view, 8, 'WAVE');
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, NUM_CHANNELS, true);
+            view.setUint32(24, SAMPLE_RATE, true);
+            view.setUint32(28, byteRate, true);
+            view.setUint16(32, blockAlign, true);
+            view.setUint16(34, BITS_PER_SAMPLE, true);
+            writeString(view, 36, 'data');
+            view.setUint32(40, dataSize, true);
+
+            return buffer;
+        }
+
+        function findDataChunkOffset(buffer) {
+            const view = new DataView(buffer);
+            let offset = 12;
+            while (offset < buffer.byteLength - 8) {
+                const id = String.fromCharCode(
+                    view.getUint8(offset), view.getUint8(offset + 1),
+                    view.getUint8(offset + 2), view.getUint8(offset + 3)
+                );
+                const size = view.getUint32(offset + 4, true);
+                if (id === 'data') return { offset: offset + 8, size: size };
+                offset += 8 + size;
+            }
+            return { offset: 44, size: buffer.byteLength - 44 };
+        }
+
+        function createSilencePlaceholder(textLength) {
+            const durationSec = Math.max(0.5, textLength / 15);
+            const numSamples = Math.floor(durationSec * SAMPLE_RATE);
+            const dataSize = numSamples * (BITS_PER_SAMPLE / 8);
+            const header = createWavHeader(dataSize);
+            const result = new Uint8Array(44 + dataSize);
+            result.set(new Uint8Array(header), 0);
+            return result.buffer;
+        }
+
+        function concatenateWavBuffers(wavBuffers) {
+            const pcmChunks = wavBuffers.map(buf => {
+                const { offset, size } = findDataChunkOffset(buf);
+                return new Uint8Array(buf, offset, size);
+            });
+            const totalPcmSize = pcmChunks.reduce((sum, c) => sum + c.byteLength, 0);
+
+            const header = createWavHeader(totalPcmSize);
+            const result = new Uint8Array(44 + totalPcmSize);
+            result.set(new Uint8Array(header), 0);
+
+            let pos = 44;
+            for (const chunk of pcmChunks) {
+                result.set(chunk, pos);
+                pos += chunk.byteLength;
+            }
+            return result.buffer;
+        }
+
+        // =====================================================================
+        // Concurrency pool
+        // =====================================================================
+        async function promisePool(tasks, concurrency) {
+            const results = new Array(tasks.length);
+            let nextIndex = 0;
+
+            async function worker() {
+                while (nextIndex < tasks.length) {
+                    const idx = nextIndex++;
+                    results[idx] = await tasks[idx]();
+                }
+            }
+
+            const workers = [];
+            for (let i = 0; i < Math.min(concurrency, tasks.length); i++) {
+                workers.push(worker());
+            }
+            await Promise.all(workers);
+            return results;
+        }
+
+        // =====================================================================
+        // Parallel generation
+        // =====================================================================
+        async function generateChunk(chunkText, voice, speed, signal) {
+            const body = JSON.stringify({
+                model: 'qwen3-tts',
+                input: chunkText,
+                voice: voice,
+                response_format: 'wav',
+                speed: speed,
+            });
+
+            for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+                try {
+                    const resp = await fetch('/v1/audio/speech', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: body,
+                        signal: signal,
+                    });
+                    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                    return await resp.arrayBuffer();
+                } catch (err) {
+                    if (err.name === 'AbortError') throw err;
+                    if (attempt < MAX_RETRIES) {
+                        await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+                    }
+                }
+            }
+            return createSilencePlaceholder(chunkText.length);
+        }
+
+        async function concurrentGenerate(chunks, voice, speed, onProgress, signal) {
+            let completed = 0;
+            let failures = 0;
+
+            const tasks = chunks.map((chunk, i) => async () => {
+                const buf = await generateChunk(chunk, voice, speed, signal);
+                const isSilence = buf.byteLength <= 44 + 100;
+                if (isSilence) failures++;
+                completed++;
+                onProgress(completed, chunks.length, failures);
+                return buf;
+            });
+
+            return await promisePool(tasks, MAX_CONCURRENCY);
+        }
+
+        // =====================================================================
+        // Progress UI
+        // =====================================================================
+        const progressContainer = document.getElementById('progressContainer');
+        const progressText = document.getElementById('progressText');
+        const progressBarFill = document.getElementById('progressBarFill');
+
+        function showProgress(completed, total, failures) {
+            progressContainer.classList.add('visible');
+            const pct = Math.round((completed / total) * 100);
+            progressBarFill.style.width = pct + '%';
+
+            let msg = 'Generating chunk ' + completed + ' / ' + total + '...';
+            if (failures > 0) msg += ' (' + failures + ' failed)';
+            if (completed === total) {
+                msg = 'All ' + total + ' chunks complete.';
+                if (failures > 0) msg += ' ' + failures + ' replaced with silence.';
+            }
+            progressText.textContent = msg;
+        }
+
+        function hideProgress() {
+            progressContainer.classList.remove('visible');
+            progressBarFill.style.width = '0%';
+        }
+
+        // =====================================================================
         // Speed slider
+        // =====================================================================
         const speedSlider = document.getElementById('speed');
         const speedValue = document.getElementById('speedValue');
-        
+
         speedSlider.addEventListener('input', () => {
             speedValue.textContent = speedSlider.value + 'x';
         });
 
-        // Form submission
+        // =====================================================================
+        // Form submission with parallel support
+        // =====================================================================
         const form = document.getElementById('ttsForm');
         const generateBtn = document.getElementById('generateBtn');
         const status = document.getElementById('status');
         const audioContainer = document.getElementById('audioContainer');
         const audioPlayer = document.getElementById('audioPlayer');
 
+        let activeAbortController = null;
+
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
-            
+
+            // Cancel in-flight parallel generation if running
+            if (activeAbortController) {
+                activeAbortController.abort();
+                activeAbortController = null;
+                generateBtn.disabled = false;
+                generateBtn.classList.remove('loading');
+                hideProgress();
+                showStatus('Generation cancelled', 'error');
+                return;
+            }
+
             const text = document.getElementById('text').value.trim();
             if (!text) {
                 showStatus('Please enter some text', 'error');
                 return;
             }
 
+            const voice = document.getElementById('voice').value;
+            const format = document.getElementById('format').value;
+            const speed = parseFloat(speedSlider.value);
+
             generateBtn.disabled = true;
             generateBtn.classList.add('loading');
             hideStatus();
+            hideProgress();
             audioContainer.classList.remove('visible');
 
             try {
-                const response = await fetch('/v1/audio/speech', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        model: 'qwen3-tts',
-                        input: text,
-                        voice: document.getElementById('voice').value,
-                        response_format: document.getElementById('format').value,
-                        speed: parseFloat(speedSlider.value),
-                    }),
-                });
+                const chunks = splitIntoChunks(text);
 
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.detail?.message || 'Failed to generate speech');
+                if (chunks.length <= 1) {
+                    // Short text: single request with user's selected format
+                    const response = await fetch('/v1/audio/speech', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            model: 'qwen3-tts',
+                            input: text,
+                            voice: voice,
+                            response_format: format,
+                            speed: speed,
+                        }),
+                    });
+
+                    if (!response.ok) {
+                        const error = await response.json();
+                        throw new Error(error.detail?.message || 'Failed to generate speech');
+                    }
+
+                    const blob = await response.blob();
+                    audioPlayer.src = URL.createObjectURL(blob);
+                    audioContainer.classList.add('visible');
+                    showStatus('Speech generated successfully!', 'success');
+
+                } else {
+                    // Long text: parallel fan-out
+                    activeAbortController = new AbortController();
+                    generateBtn.disabled = false;
+                    showProgress(0, chunks.length, 0);
+
+                    const wavBuffers = await concurrentGenerate(
+                        chunks, voice, speed,
+                        (done, total, failed) => showProgress(done, total, failed),
+                        activeAbortController.signal
+                    );
+
+                    activeAbortController = null;
+
+                    const allSilence = wavBuffers.every(buf => buf.byteLength <= 44 + 100);
+                    if (allSilence) throw new Error('All chunks failed to generate');
+
+                    const combinedWav = concatenateWavBuffers(wavBuffers);
+                    const blob = new Blob([combinedWav], { type: 'audio/wav' });
+                    audioPlayer.src = URL.createObjectURL(blob);
+                    audioContainer.classList.add('visible');
+
+                    const failCount = wavBuffers.filter(buf => buf.byteLength <= 44 + 100).length;
+                    if (failCount > 0) {
+                        showStatus(chunks.length + ' chunks processed, ' + failCount + ' replaced with silence', 'success');
+                    } else {
+                        showStatus(chunks.length + ' chunks generated and combined successfully!', 'success');
+                    }
                 }
 
-                const blob = await response.blob();
-                const url = URL.createObjectURL(blob);
-                
-                audioPlayer.src = url;
-                audioContainer.classList.add('visible');
-                showStatus('Speech generated successfully!', 'success');
-
             } catch (error) {
-                showStatus(error.message, 'error');
+                if (error.name === 'AbortError') {
+                    showStatus('Generation cancelled', 'error');
+                } else {
+                    showStatus(error.message, 'error');
+                }
             } finally {
+                activeAbortController = null;
                 generateBtn.disabled = false;
                 generateBtn.classList.remove('loading');
             }
