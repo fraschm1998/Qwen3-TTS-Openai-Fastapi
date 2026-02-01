@@ -54,13 +54,13 @@ def get_backend() -> TTSBackend:
     
     elif backend_type == "vllm_omni" or backend_type == "vllm-omni" or backend_type == "vllm":
         # vLLM-Omni backend
+        stage_configs_path = os.getenv("VLLM_STAGE_CONFIGS_PATH")
+        kwargs = {}
         if model_name:
-            _backend_instance = VLLMOmniQwen3TTSBackend(model_name=model_name)
-        else:
-            # Use 1.7B model for best quality/speed tradeoff
-            _backend_instance = VLLMOmniQwen3TTSBackend(
-                model_name="Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
-            )
+            kwargs["model_name"] = model_name
+        if stage_configs_path:
+            kwargs["stage_configs_path"] = stage_configs_path
+        _backend_instance = VLLMOmniQwen3TTSBackend(**kwargs)
         
         logger.info(f"Using vLLM-Omni backend with model: {_backend_instance.get_model_id()}")
     

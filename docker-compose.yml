@@ -43,6 +43,7 @@ services:
       - TTS_BACKEND=vllm_omni
       - TTS_WARMUP_ON_START=true
       - TTS_MODEL_NAME=Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+      - VLLM_STAGE_CONFIGS_PATH=/app/config/vllm_stage_config.yaml
       - VLLM_WORKER_MULTIPROC_METHOD=spawn
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
