@@ -10,10 +10,30 @@ from .schemas import (
     ModelInfo,
     VoiceInfo,
 )
+from .job_schemas import (
+    JobStatus,
+    ChapterStatus,
+    ChapterInput,
+    JobCreateRequest,
+    ChapterProgress,
+    JobResponse,
+    JobSummary,
+    JobListResponse,
+    WebhookPayload,
+)
 
 __all__ = [
     "OpenAISpeechRequest",
     "NormalizationOptions",
     "ModelInfo",
     "VoiceInfo",
+    "JobStatus",
+    "ChapterStatus",
+    "ChapterInput",
+    "JobCreateRequest",
+    "ChapterProgress",
+    "JobResponse",
+    "JobSummary",
+    "JobListResponse",
+    "WebhookPayload",
 ]

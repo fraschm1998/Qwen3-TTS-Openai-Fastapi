@@ -34,6 +34,9 @@ WORKERS = int(os.getenv("WORKERS", "1"))
 TTS_BACKEND = os.getenv("TTS_BACKEND", "official")
 TTS_WARMUP_ON_START = os.getenv("TTS_WARMUP_ON_START", "false").lower() == "true"
 
+# Job queue configuration
+JOB_OUTPUT_DIR = os.getenv("JOB_OUTPUT_DIR", "output/jobs")
+
 # CORS configuration
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
 
@@ -82,10 +85,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Backend initialization delayed: {e}")
         logger.info("Backend will be loaded on first request.")
-    
+
+    # Start job queue
+    from .services.job_manager import JobManager, set_job_manager
+    job_manager = JobManager(output_dir=JOB_OUTPUT_DIR)
+    await job_manager.startup()
+    set_job_manager(job_manager)
+
     yield
-    
+
     # Cleanup
+    await job_manager.shutdown()
     logger.info("Server shutting down...")
 
 
@@ -136,7 +146,9 @@ app.add_middleware(
 
 # Include routers
 from .routers.openai_compatible import router as openai_router
+from .routers.jobs import router as jobs_router
 app.include_router(openai_router, prefix="/v1")
+app.include_router(jobs_router, prefix="/v1")
 
 # Mount static files if directory exists
 if STATIC_DIR.exists():

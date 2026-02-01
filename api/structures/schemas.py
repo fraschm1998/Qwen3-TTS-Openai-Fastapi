@@ -50,8 +50,7 @@ class OpenAISpeechRequest(BaseModel):
     )
     input: str = Field(
         ...,
-        description="The text to generate audio for. Maximum length is 4096 characters.",
-        max_length=4096,
+        description="The text to generate audio for. Long text is automatically split into chunks.",
     )
     voice: str = Field(
         default="Vivian",
@@ -108,8 +107,7 @@ class VoiceCloneRequest(BaseModel):
 
     input: str = Field(
         ...,
-        description="The text to generate audio for using the cloned voice.",
-        max_length=4096,
+        description="The text to generate audio for using the cloned voice. Long text is automatically split into chunks.",
     )
     ref_audio: str = Field(
         ...,

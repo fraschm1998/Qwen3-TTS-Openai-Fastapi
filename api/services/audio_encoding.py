@@ -182,22 +182,16 @@ def encode_audio(
         return convert_to_wav(audio, sample_rate)
 
 
-async def encode_audio_streaming(
-    audio_generator,
-    format: AudioFormat = "mp3",
-    sample_rate: int = DEFAULT_SAMPLE_RATE,
-):
+def iter_audio_chunks(data: bytes, chunk_size: int = 4096):
     """
-    Async generator that encodes audio chunks to the specified format.
-    
+    Yield fixed-size chunks from encoded audio bytes.
+
     Args:
-        audio_generator: Async generator yielding audio chunks as numpy arrays
-        format: Target audio format
-        sample_rate: Sample rate in Hz
-    
+        data: Fully encoded audio bytes
+        chunk_size: Size of each chunk in bytes
+
     Yields:
-        Encoded audio chunks
+        Byte chunks of the specified size (last chunk may be smaller)
     """
-    async for audio_chunk in audio_generator:
-        if audio_chunk is not None and len(audio_chunk) > 0:
-            yield encode_audio(audio_chunk, format, sample_rate)
+    for i in range(0, len(data), chunk_size):
+        yield data[i:i + chunk_size]

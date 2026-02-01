@@ -5,5 +5,6 @@ API routers package.
 """
 
 from .openai_compatible import router as openai_router
+from .jobs import router as jobs_router
 
-__all__ = ["openai_router"]
+__all__ = ["openai_router", "jobs_router"]

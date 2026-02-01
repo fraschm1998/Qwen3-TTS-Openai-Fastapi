@@ -8,7 +8,6 @@ Implements endpoints compatible with OpenAI's TTS API specification.
 import base64
 import io
 import logging
-import time
 from typing import List, Optional
 
 import numpy as np
@@ -23,8 +22,16 @@ from ..structures.schemas import (
     VoiceCloneRequest,
     VoiceCloneCapabilities,
 )
-from ..services.text_processing import normalize_text
-from ..services.audio_encoding import encode_audio, get_content_type, DEFAULT_SAMPLE_RATE
+from ..services.text_processing import normalize_text, split_into_chunks
+from ..services.audio_encoding import encode_audio, get_content_type, iter_audio_chunks, DEFAULT_SAMPLE_RATE
+from ..services.tts_engine import (
+    get_tts_backend,
+    get_voice_name,
+    generate_speech,
+    generate_speech_chunked,
+    VOICE_MAPPING,
+    SILENCE_DURATION_SECONDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,17 +106,6 @@ for lang_code in LANGUAGE_CODE_MAPPING.keys():
     MODEL_MAPPING[f"tts-1-{lang_code}"] = "qwen3-tts"
     MODEL_MAPPING[f"tts-1-hd-{lang_code}"] = "qwen3-tts"
 
-# OpenAI voice mapping to Qwen voices
-VOICE_MAPPING = {
-    "alloy": "Vivian",
-    "echo": "Ryan",
-    "fable": "Sophia",
-    "nova": "Isabella",
-    "onyx": "Evan",
-    "shimmer": "Lily",
-}
-
-
 def extract_language_from_model(model_name: str) -> Optional[str]:
     """
     Extract language from model name if it has a language suffix.
@@ -130,68 +126,6 @@ def extract_language_from_model(model_name: str) -> Optional[str]:
             if model_name == f"tts-1{suffix}" or model_name == f"tts-1-hd{suffix}":
                 return lang_name
     return None
-
-
-async def get_tts_backend():
-    """Get the TTS backend instance, initializing if needed."""
-    from ..backends import get_backend, initialize_backend
-    
-    backend = get_backend()
-    
-    if not backend.is_ready():
-        await initialize_backend()
-    
-    return backend
-
-
-def get_voice_name(voice: str) -> str:
-    """Map voice name to internal voice identifier."""
-    # Check OpenAI voice mapping first
-    if voice.lower() in VOICE_MAPPING:
-        return VOICE_MAPPING[voice.lower()]
-    # Otherwise use the voice name directly
-    return voice
-
-
-async def generate_speech(
-    text: str,
-    voice: str,
-    language: str = "Auto",
-    instruct: Optional[str] = None,
-    speed: float = 1.0,
-) -> tuple[np.ndarray, int]:
-    """
-    Generate speech from text using the configured TTS backend.
-    
-    Args:
-        text: The text to synthesize
-        voice: Voice name to use
-        language: Language code
-        instruct: Optional instruction for voice style
-        speed: Speech speed multiplier
-    
-    Returns:
-        Tuple of (audio_array, sample_rate)
-    """
-    backend = await get_tts_backend()
-    
-    # Map voice name
-    voice_name = get_voice_name(voice)
-    
-    # Generate speech using the backend
-    try:
-        audio, sr = await backend.generate_speech(
-            text=text,
-            voice=voice_name,
-            language=language,
-            instruct=instruct,
-            speed=speed,
-        )
-        
-        return audio, sr
-        
-    except Exception as e:
-        raise RuntimeError(f"Speech generation failed: {e}")
 
 
 @router.post("/audio/speech")
@@ -233,14 +167,26 @@ async def create_speech(
         model_language = extract_language_from_model(request.model)
         language = model_language if model_language else (request.language or "Auto")
         
-        # Generate speech
-        audio, sample_rate = await generate_speech(
-            text=normalized_text,
-            voice=request.voice,
-            language=language,
-            instruct=request.instruct,
-            speed=request.speed,
-        )
+        # Generate speech via priority queue (preempts batch jobs)
+        from ..services.job_manager import get_job_manager
+        try:
+            manager = get_job_manager()
+            audio, sample_rate = await manager.generate_priority(
+                text=normalized_text,
+                voice=request.voice,
+                language=language,
+                instruct=request.instruct,
+                speed=request.speed,
+            )
+        except RuntimeError:
+            # JobManager not initialized yet — fall back to direct call
+            audio, sample_rate = await generate_speech_chunked(
+                text=normalized_text,
+                voice=request.voice,
+                language=language,
+                instruct=request.instruct,
+                speed=request.speed,
+            )
         
         # Encode audio to requested format
         audio_bytes = encode_audio(audio, request.response_format, sample_rate)
@@ -249,13 +195,22 @@ async def create_speech(
         content_type = get_content_type(request.response_format)
         
         # Return audio response
+        headers = {
+            "Content-Disposition": f"attachment; filename=speech.{request.response_format}",
+            "Cache-Control": "no-cache",
+        }
+
+        if request.stream:
+            return StreamingResponse(
+                iter_audio_chunks(audio_bytes),
+                media_type=content_type,
+                headers=headers,
+            )
+
         return Response(
             content=audio_bytes,
             media_type=content_type,
-            headers={
-                "Content-Disposition": f"attachment; filename=speech.{request.response_format}",
-                "Cache-Control": "no-cache",
-            },
+            headers=headers,
         )
         
     except HTTPException:
@@ -481,16 +436,46 @@ async def create_voice_clone(
                 },
             )
 
-        # Generate voice clone
-        audio, sample_rate = await backend.generate_voice_clone(
-            text=normalized_text,
-            ref_audio=ref_audio,
-            ref_audio_sr=ref_sr,
-            ref_text=request.ref_text,
-            language=request.language or "Auto",
-            x_vector_only_mode=request.x_vector_only_mode,
-            speed=request.speed,
-        )
+        # Split text into chunks for long input
+        chunks = split_into_chunks(normalized_text)
+
+        if len(chunks) <= 1:
+            audio, sample_rate = await backend.generate_voice_clone(
+                text=normalized_text,
+                ref_audio=ref_audio,
+                ref_audio_sr=ref_sr,
+                ref_text=request.ref_text,
+                language=request.language or "Auto",
+                x_vector_only_mode=request.x_vector_only_mode,
+                speed=request.speed,
+            )
+        else:
+            logger.info(f"Voice clone: splitting text into {len(chunks)} chunks")
+            audio_segments = []
+            sample_rate = None
+
+            for i, chunk in enumerate(chunks):
+                chunk_audio, chunk_sr = await backend.generate_voice_clone(
+                    text=chunk,
+                    ref_audio=ref_audio,
+                    ref_audio_sr=ref_sr,
+                    ref_text=request.ref_text,
+                    language=request.language or "Auto",
+                    x_vector_only_mode=request.x_vector_only_mode,
+                    speed=request.speed,
+                )
+
+                if sample_rate is None:
+                    sample_rate = chunk_sr
+
+                audio_segments.append(chunk_audio)
+
+                if i < len(chunks) - 1:
+                    silence_samples = int(chunk_sr * SILENCE_DURATION_SECONDS)
+                    silence = np.zeros(silence_samples, dtype=np.float32)
+                    audio_segments.append(silence)
+
+            audio = np.concatenate(audio_segments)
 
         # Encode audio to requested format
         audio_bytes = encode_audio(audio, request.response_format, sample_rate)

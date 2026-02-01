@@ -475,5 +475,70 @@ def normalize_text(text: str, options: Optional[NormalizationOptions] = None) ->
     # Final whitespace cleanup
     text = re.sub(r"\s{2,}", " ", text)
     text = text.strip()
-    
+
     return text
+
+
+# Default chunk size in characters for long text splitting
+DEFAULT_CHUNK_SIZE = 500
+
+# Split after sentence-ending punctuation followed by whitespace, or at paragraph breaks.
+# Lookbehind keeps the punctuation attached to the preceding sentence.
+_SENTENCE_SPLIT_PATTERN = re.compile(r'(?<=[.!?;])\s+|\n\n+')
+
+
+def split_into_chunks(text: str, max_chunk_size: int = DEFAULT_CHUNK_SIZE) -> list[str]:
+    """
+    Split text into chunks at natural sentence boundaries.
+
+    Text normalization (which expands abbreviations like Dr. -> Doctor)
+    should be applied BEFORE calling this function so abbreviation
+    periods do not trigger false splits.
+
+    If text is shorter than max_chunk_size, returns it as a single-element list
+    (fast path, no overhead for short inputs).
+
+    Args:
+        text: Normalized text to split
+        max_chunk_size: Maximum characters per chunk (default 500)
+
+    Returns:
+        List of text chunks
+    """
+    text = text.strip()
+    if not text:
+        return []
+
+    # Fast path: short text passes through unchanged
+    if len(text) <= max_chunk_size:
+        return [text]
+
+    # Split into sentences
+    sentences = _SENTENCE_SPLIT_PATTERN.split(text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+
+    chunks: list[str] = []
+    current_chunk = ""
+
+    for sentence in sentences:
+        # If a single sentence exceeds max_chunk_size, keep it whole
+        if len(sentence) > max_chunk_size:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+                current_chunk = ""
+            chunks.append(sentence.strip())
+            continue
+
+        # Check if adding this sentence would exceed the limit
+        candidate = f"{current_chunk} {sentence}".strip() if current_chunk else sentence
+        if len(candidate) <= max_chunk_size:
+            current_chunk = candidate
+        else:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            current_chunk = sentence
+
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+
+    return chunks

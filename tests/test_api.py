@@ -4,6 +4,7 @@
 Tests for API endpoints.
 """
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -187,6 +188,60 @@ class TestSpeechEndpoint:
             # In a real test with mocking, it would succeed
             assert "response_format" in request_data
             assert request_data["response_format"] == fmt
+
+    def test_speech_streaming_returns_chunked_response(self, client, monkeypatch):
+        """Test that stream=True returns a streaming response."""
+        from unittest.mock import MagicMock, AsyncMock
+        from api.backends import factory
+
+        mock_backend = MagicMock()
+        mock_backend.is_ready.return_value = True
+        mock_backend.generate_speech = AsyncMock(
+            return_value=(np.zeros(24000, dtype=np.float32), 24000)
+        )
+        factory._backend_instance = mock_backend
+
+        response = client.post(
+            "/v1/audio/speech",
+            json={
+                "model": "qwen3-tts",
+                "input": "Hello world",
+                "voice": "Vivian",
+                "stream": True,
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "audio/mpeg"
+        assert "content-length" not in response.headers
+        assert len(response.content) > 0
+
+    def test_speech_non_streaming_returns_full_response(self, client, monkeypatch):
+        """Test that stream=False returns a standard response with content-length."""
+        from unittest.mock import MagicMock, AsyncMock
+        from api.backends import factory
+
+        mock_backend = MagicMock()
+        mock_backend.is_ready.return_value = True
+        mock_backend.generate_speech = AsyncMock(
+            return_value=(np.zeros(24000, dtype=np.float32), 24000)
+        )
+        factory._backend_instance = mock_backend
+
+        response = client.post(
+            "/v1/audio/speech",
+            json={
+                "model": "qwen3-tts",
+                "input": "Hello world",
+                "voice": "Vivian",
+                "stream": False,
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "audio/mpeg"
+        assert "content-length" in response.headers
+        assert len(response.content) > 0
 
 
 class TestVoiceCloneEndpoints:
