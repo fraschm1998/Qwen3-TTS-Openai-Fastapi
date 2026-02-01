@@ -213,10 +213,6 @@ class VLLMOmniQwen3TTSBackend(TTSBackend):
                 return audio_np, sr
 
         raise RuntimeError("No audio returned from vLLM-Omni (no stage outputs)")
-            
-        except Exception as e:
-            logger.error(f"vLLM-Omni speech generation failed: {e}")
-            raise RuntimeError(f"vLLM-Omni speech generation failed: {e}")
     
     def synthesize_wav_bytes(
         self,
