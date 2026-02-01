@@ -87,6 +87,7 @@ RUN pip install --no-cache-dir \
     numpy \
     scipy \
     einops \
+    sox \
     onnxruntime-gpu
 
 # Install FastAPI and server dependencies
@@ -175,6 +176,7 @@ RUN pip install --no-cache-dir \
     numpy \
     scipy \
     einops \
+    sox \
     onnxruntime-gpu
 
 # Install FastAPI and server dependencies
