@@ -31,7 +31,10 @@ services:
       - PORT=8881
       - WORKERS=1
       - CORS_ORIGINS=*
-      - TTS_BACKEND=official
+      # Default backend is faster-qwen3-tts (CUDA graphs). Rollback:
+      # TTS_BACKEND=official docker compose up -d
+      - TTS_BACKEND=${TTS_BACKEND:-faster}
+      - TTS_CHUNK_SIZE=${TTS_CHUNK_SIZE:-12}
       - TTS_WARMUP_ON_START=false
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
@@ -43,7 +46,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 120s
+      start_period: 240s   # model load + CUDA graph capture (faster backend)
 
   qwen3-tts-2:
     build:
@@ -58,7 +61,10 @@ services:
       - PORT=8882
       - WORKERS=1
       - CORS_ORIGINS=*
-      - TTS_BACKEND=official
+      # Default backend is faster-qwen3-tts (CUDA graphs). Rollback:
+      # TTS_BACKEND=official docker compose up -d
+      - TTS_BACKEND=${TTS_BACKEND:-faster}
+      - TTS_CHUNK_SIZE=${TTS_CHUNK_SIZE:-12}
       - TTS_WARMUP_ON_START=false
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
@@ -70,7 +76,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 120s
+      start_period: 240s   # model load + CUDA graph capture (faster backend)
 
   qwen3-tts-3:
     build:
@@ -85,7 +91,10 @@ services:
       - PORT=8883
       - WORKERS=1
       - CORS_ORIGINS=*
-      - TTS_BACKEND=official
+      # Default backend is faster-qwen3-tts (CUDA graphs). Rollback:
+      # TTS_BACKEND=official docker compose up -d
+      - TTS_BACKEND=${TTS_BACKEND:-faster}
+      - TTS_CHUNK_SIZE=${TTS_CHUNK_SIZE:-12}
       - TTS_WARMUP_ON_START=false
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
@@ -97,7 +106,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 120s
+      start_period: 240s   # model load + CUDA graph capture (faster backend)
 
   qwen3-tts-4:
     build:
@@ -112,7 +121,10 @@ services:
       - PORT=8884
       - WORKERS=1
       - CORS_ORIGINS=*
-      - TTS_BACKEND=official
+      # Default backend is faster-qwen3-tts (CUDA graphs). Rollback:
+      # TTS_BACKEND=official docker compose up -d
+      - TTS_BACKEND=${TTS_BACKEND:-faster}
+      - TTS_CHUNK_SIZE=${TTS_CHUNK_SIZE:-12}
       - TTS_WARMUP_ON_START=false
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
@@ -124,7 +136,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 120s
+      start_period: 240s   # model load + CUDA graph capture (faster backend)
 
   # =========================================================================
   # Single instance (official backend)
@@ -143,7 +155,10 @@ services:
       - PORT=8880
       - WORKERS=1
       - CORS_ORIGINS=*
-      - TTS_BACKEND=official
+      # Default backend is faster-qwen3-tts (CUDA graphs). Rollback:
+      # TTS_BACKEND=official docker compose up -d
+      - TTS_BACKEND=${TTS_BACKEND:-faster}
+      - TTS_CHUNK_SIZE=${TTS_CHUNK_SIZE:-12}
       - TTS_WARMUP_ON_START=false
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
@@ -155,7 +170,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 120s
+      start_period: 240s   # model load + CUDA graph capture (faster backend)
     profiles:
       - single
 
@@ -197,6 +212,41 @@ services:
       - vllm
 
   # =========================================================================
+  # Voice cloning (faster backend + Base model)
+  # Usage: docker compose --profile clone up qwen3-tts-clone
+  # =========================================================================
+  qwen3-tts-clone:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: qwen3-tts-api-clone
+    runtime: nvidia
+    network_mode: host
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8885
+      - WORKERS=1
+      - CORS_ORIGINS=*
+      - TTS_BACKEND=${TTS_BACKEND:-faster}
+      - TTS_MODEL_NAME=Qwen/Qwen3-TTS-12Hz-1.7B-Base
+      - TTS_CHUNK_SIZE=${TTS_CHUNK_SIZE:-12}
+      - TTS_WARMUP_ON_START=false
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    volumes:
+      - ~/.cache/huggingface:/home/appuser/.cache/huggingface
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8885/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 240s   # model load + CUDA graph capture (faster backend)
+    profiles:
+      - clone
+
+  # =========================================================================
   # CPU-only
   # Usage: docker compose --profile cpu up qwen3-tts-cpu
   # =========================================================================
@@ -228,5 +278,12 @@ services:
 
 # Default:         docker compose up                (4 replicas + nginx)
 # Single:          docker compose --profile single up qwen3-tts-gpu
+# Voice clone:     docker compose --profile clone up qwen3-tts-clone
 # vLLM:            docker compose --profile vllm up qwen3-tts-vllm
 # CPU:             docker compose --profile cpu up qwen3-tts-cpu
+#
+# GPU services default to TTS_BACKEND=faster (CUDA graphs). Rollback to the
+# previous backend with: TTS_BACKEND=official docker compose up -d
+#
+# NOTE: the faster backend adds CUDA-graph buffers on top of the ~4 GB model.
+# On a 24 GB card, 1-2 replicas are validated; measure VRAM before running 4.

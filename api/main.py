@@ -34,6 +34,15 @@ WORKERS = int(os.getenv("WORKERS", "1"))
 TTS_BACKEND = os.getenv("TTS_BACKEND", "official")
 TTS_WARMUP_ON_START = os.getenv("TTS_WARMUP_ON_START", "false").lower() == "true"
 
+# Fail-fast: crash on backend init failure instead of serving a broken API.
+# Defaults to on for the 'faster' backend (GPU-only — lazy retry on first
+# request cannot succeed if CUDA/graph capture failed at startup).
+_fail_fast_env = os.getenv("TTS_FAIL_FAST", "").lower()
+TTS_FAIL_FAST = (
+    _fail_fast_env == "true"
+    or (_fail_fast_env == "" and TTS_BACKEND.startswith("faster"))
+)
+
 # Job queue configuration
 JOB_OUTPUT_DIR = os.getenv("JOB_OUTPUT_DIR", "output/jobs")
 
@@ -83,6 +92,13 @@ async def lifespan(app: FastAPI):
             logger.info(f"GPU: {device_info.get('gpu_name')}")
             logger.info(f"VRAM: {device_info.get('vram_total')}")
     except Exception as e:
+        if TTS_FAIL_FAST:
+            logger.error(f"Backend initialization failed: {e}")
+            logger.error(
+                "TTS_FAIL_FAST is active — refusing to start with a broken backend. "
+                "Set TTS_FAIL_FAST=false to start anyway and retry on first request."
+            )
+            raise
         logger.warning(f"Backend initialization delayed: {e}")
         logger.info("Backend will be loaded on first request.")
 

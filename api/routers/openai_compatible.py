@@ -8,6 +8,7 @@ Implements endpoints compatible with OpenAI's TTS API specification.
 import base64
 import io
 import logging
+from contextlib import aclosing
 from typing import List, Optional
 
 import numpy as np
@@ -23,12 +24,19 @@ from ..structures.schemas import (
     VoiceCloneCapabilities,
 )
 from ..services.text_processing import normalize_text, split_into_chunks
-from ..services.audio_encoding import encode_audio, get_content_type, iter_audio_chunks, DEFAULT_SAMPLE_RATE
+from ..services.audio_encoding import (
+    encode_audio,
+    get_content_type,
+    iter_audio_chunks,
+    convert_to_pcm,
+    DEFAULT_SAMPLE_RATE,
+)
 from ..services.tts_engine import (
     get_tts_backend,
     get_voice_name,
     generate_speech,
     generate_speech_chunked,
+    generate_speech_streaming,
     VOICE_MAPPING,
     SILENCE_DURATION_SECONDS,
 )
@@ -106,6 +114,25 @@ for lang_code in LANGUAGE_CODE_MAPPING.keys():
     MODEL_MAPPING[f"tts-1-{lang_code}"] = "qwen3-tts"
     MODEL_MAPPING[f"tts-1-hd-{lang_code}"] = "qwen3-tts"
 
+async def _can_stream_live(request_stream: bool, response_format: str, speed: float) -> bool:
+    """
+    Whether a request qualifies for live (incremental) streaming.
+
+    Live streaming needs a streaming-capable backend, raw PCM output
+    (compressed containers can't be encoded per-chunk without artifacts),
+    and no speed adjustment (time-stretching per chunk causes boundary
+    glitches). Everything else keeps the generate-then-send behavior.
+    """
+    if not (request_stream and response_format == "pcm" and speed == 1.0):
+        return False
+    try:
+        backend = await get_tts_backend()
+        return backend.supports_streaming()
+    except Exception as e:
+        logger.warning(f"Could not check streaming capability: {e}")
+        return False
+
+
 def extract_language_from_model(model_name: str) -> Optional[str]:
     """
     Extract language from model name if it has a language suffix.
@@ -166,7 +193,35 @@ async def create_speech(
         # Extract language from model name if present, otherwise use request language
         model_language = extract_language_from_model(request.model)
         language = model_language if model_language else (request.language or "Auto")
-        
+
+        # Live streaming path: PCM chunks are sent as the backend decodes,
+        # giving time-to-first-audio far below full-generation latency.
+        if await _can_stream_live(request.stream, request.response_format, request.speed):
+            async def pcm_stream():
+                try:
+                    async with aclosing(
+                        generate_speech_streaming(
+                            text=normalized_text,
+                            voice=request.voice,
+                            language=language,
+                            instruct=request.instruct,
+                        )
+                    ) as stream:
+                        async for audio_chunk, _sr in stream:
+                            yield convert_to_pcm(audio_chunk)
+                except Exception as e:
+                    # Headers are already sent; all we can do is log and stop.
+                    logger.error(f"Live PCM stream aborted: {e}")
+
+            return StreamingResponse(
+                pcm_stream(),
+                media_type=get_content_type("pcm"),
+                headers={
+                    "Content-Disposition": "attachment; filename=speech.pcm",
+                    "Cache-Control": "no-cache",
+                },
+            )
+
         # Generate speech via priority queue (preempts batch jobs)
         from ..services.job_manager import get_job_manager
         try:
@@ -436,6 +491,45 @@ async def create_voice_clone(
                 },
             )
 
+        # Live streaming path (see create_speech): PCM chunks as decoded.
+        if await _can_stream_live(request.stream, request.response_format, request.speed):
+            chunks = split_into_chunks(normalized_text)
+
+            async def pcm_clone_stream():
+                try:
+                    for i, text_chunk in enumerate(chunks):
+                        chunk_sr = None
+                        async with aclosing(
+                            backend.generate_voice_clone_streaming(
+                                text=text_chunk,
+                                ref_audio=ref_audio,
+                                ref_audio_sr=ref_sr,
+                                ref_text=request.ref_text,
+                                language=request.language or "Auto",
+                                x_vector_only_mode=request.x_vector_only_mode,
+                            )
+                        ) as stream:
+                            async for audio_chunk, sr in stream:
+                                chunk_sr = sr
+                                yield convert_to_pcm(audio_chunk)
+
+                        if i < len(chunks) - 1 and chunk_sr:
+                            silence = np.zeros(
+                                int(chunk_sr * SILENCE_DURATION_SECONDS), dtype=np.float32
+                            )
+                            yield convert_to_pcm(silence)
+                except Exception as e:
+                    logger.error(f"Live voice-clone PCM stream aborted: {e}")
+
+            return StreamingResponse(
+                pcm_clone_stream(),
+                media_type=get_content_type("pcm"),
+                headers={
+                    "Content-Disposition": "attachment; filename=voice_clone.pcm",
+                    "Cache-Control": "no-cache",
+                },
+            )
+
         # Split text into chunks for long input
         chunks = split_into_chunks(normalized_text)
 
@@ -484,13 +578,22 @@ async def create_voice_clone(
         content_type = get_content_type(request.response_format)
 
         # Return audio response
+        headers = {
+            "Content-Disposition": f"attachment; filename=voice_clone.{request.response_format}",
+            "Cache-Control": "no-cache",
+        }
+
+        if request.stream:
+            return StreamingResponse(
+                iter_audio_chunks(audio_bytes),
+                media_type=content_type,
+                headers=headers,
+            )
+
         return Response(
             content=audio_bytes,
             media_type=content_type,
-            headers={
-                "Content-Disposition": f"attachment; filename=voice_clone.{request.response_format}",
-                "Cache-Control": "no-cache",
-            },
+            headers=headers,
         )
 
     except HTTPException:

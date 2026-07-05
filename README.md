@@ -32,15 +32,56 @@ This repository provides an **OpenAI-compatible FastAPI server** for **Qwen3-TTS
 
 ### Backend Options
 
-This implementation supports two backend engines:
+This implementation supports three backend engines:
 
 | Backend | Speed | Setup | Best For | Status |
 |---------|-------|-------|----------|--------|
-| **Official** (default) | ⚡⚡ Excellent | ✅ Simple | All use cases, production-ready | ✅ Stable |
-| **vLLM-Omni** | ⚡⚡⚡ Fast | ⚠️ Python 3.12 + CUDA | High-throughput, low-latency | ✅ Available |
+| **Faster** (CUDA graphs) | ⚡⚡⚡⚡ Fastest | ✅ Simple (GPU only) | Real-time / streaming, voice clone | 🧪 Pending 3090 validation |
+| **Official** (fallback default) | ⚡⚡ Excellent | ✅ Simple | CPU deployments, reference behavior | ✅ Stable |
+| **vLLM-Omni** | ⚡⚡⚡ Fast | ⚠️ Python 3.12 + CUDA | High-throughput batch | ✅ Available |
 
-- **Official Backend**: Uses the official Qwen3-TTS Python implementation. **Recommended for most users.**
+- **Faster Backend** (`TTS_BACKEND=faster`): Uses [faster-qwen3-tts](https://github.com/andimarafioti/faster-qwen3-tts), which captures the talker + predictor decode loops as CUDA graphs (static KV cache). Upstream benchmarks: ~4.2x real-time and ~174 ms time-to-first-audio on an RTX 4090 (1.7B model) vs ~0.8x real-time / ~850 ms for the baseline. **GPU-only** — the server fails fast at startup if CUDA is unavailable. Supports custom voices, **voice cloning** (Base model), and **live PCM streaming** (see below). Note: CUDA-graph inference uses a static cache and is not bit-identical to the official implementation; A/B the audio before switching production traffic.
+- **Official Backend**: Uses the official Qwen3-TTS Python implementation. Reference behavior, works on CPU.
 - **vLLM-Omni Backend**: Uses [vLLM-Omni](https://docs.vllm.ai/projects/vllm-omni/) for optimized inference. Requires Python 3.12 and a dedicated Docker image. See [VLLM_BACKEND_STATUS.md](VLLM_BACKEND_STATUS.md) for details.
+
+### Faster Backend (CUDA Graphs)
+
+```bash
+# Install (pulls faster-qwen3-tts; requires Python 3.10+ and torch>=2.5.1)
+pip install ".[api,faster]"
+
+# Run
+TTS_BACKEND=faster python -m api.main
+
+# Voice cloning (Base model)
+TTS_BACKEND=faster TTS_MODEL_NAME=Qwen/Qwen3-TTS-12Hz-1.7B-Base python -m api.main
+```
+
+Packaging note: `faster-qwen3-tts` depends on `qwen-tts>=0.1.1`. This repository *is* a
+fork of `qwen-tts` (version `0.1.1+fieri`), so that requirement resolves against the
+in-tree package — the PyPI `qwen-tts` is never installed. When bumping the
+`faster-qwen3-tts` pin, re-verify the `qwen_tts` internals it touches still exist here
+(see `api/backends/faster_qwen3_tts.py`).
+
+Environment variables:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `TTS_BACKEND` | `official` (code) / `faster` (compose) | Backend selection |
+| `TTS_CHUNK_SIZE` | `12` | Streaming granularity in codec steps (12 ≈ 1 s of audio; lower = lower TTFA) |
+| `TTS_ATTN_IMPLEMENTATION` | `sdpa` | Attention impl passed to the model |
+| `TTS_FAIL_FAST` | auto (`true` for faster) | Crash on backend init failure instead of serving broken |
+| `TTS_REF_AUDIO_CACHE_DIR` | `$TMPDIR/qwen3_tts_ref_cache` | Voice-clone reference audio cache (0700, content-addressed) |
+| `TTS_REF_AUDIO_CACHE_MAX` | `32` | Max cached reference files (LRU eviction) |
+| `TTS_MAX_REF_AUDIO_SECONDS` | `60` | Reject longer reference audio |
+
+**Live PCM streaming**: with the faster backend, `POST /v1/audio/speech` (and
+`/v1/audio/voice-clone`) requests with `"stream": true, "response_format": "pcm",
+"speed": 1.0` stream raw 24 kHz 16-bit mono PCM chunks *as they are decoded* —
+time-to-first-audio is a few hundred ms instead of full-generation latency. Other
+formats/backends keep the existing generate-then-send behavior. A live stream
+holds the GPU until it finishes; on a single-GPU box, concurrent requests queue
+behind it (same serialization the GPU imposes anyway).
 
 ## 🚀 Performance Benchmarks
 
@@ -74,7 +115,11 @@ Performance comparison with Flash Attention 2 optimization on NVIDIA RTX 3090 (2
 - **Test Method**: 1 cold run + 5 warm runs per prompt
 - **Docker Images**: Built with Flash Attention 2
 
-**Production Recommendation:** Use **Official backend with Flash Attention 2** for best performance (RTF 0.87, ~15% faster than real-time).
+**Production Recommendation:** Use the **faster backend** (CUDA graphs) on GPU hosts —
+upstream numbers show ~4-5x the throughput of these configurations with ~5x lower
+time-to-first-audio. The table above reflects the previous best (official + Flash
+Attention 2, RTF 0.87). RTX 3090 numbers for the faster backend are pending
+(re-run `bench_tts.py` after deploying; expected ~2.5-3.5x real-time).
 
 See [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md) for full details.
 

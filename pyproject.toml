@@ -4,7 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qwen-tts"
-version = "0.0.4"
+# Local-version suffix (PEP 440): this fork tracks upstream qwen-tts 0.1.1's
+# API surface, which lets faster-qwen3-tts's `qwen-tts>=0.1.1` requirement
+# resolve against this in-tree package instead of pulling (and clobbering it
+# with) the PyPI distribution of the same name. When bumping the
+# faster-qwen3-tts pin, re-verify the qwen_tts internals it touches still
+# exist here (see api/backends/faster_qwen3_tts.py).
+version = "0.1.1+fieri"
 description = "Qwen-TTS python package"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -44,6 +50,13 @@ api = [
 ]
 vllm = [
   "vllm>=0.4.0",
+]
+# CUDA-graph accelerated backend (TTS_BACKEND=faster). GPU-only.
+# Requires Python 3.10+ and torch>=2.5.1 (CUDA graph capture is
+# unreliable on older torch). Its qwen-tts>=0.1.1 dependency is
+# satisfied by this package itself — see the version comment above.
+faster = [
+  "faster-qwen3-tts>=0.3.0,<0.4",
 ]
 dev = [
   "pytest>=7.0.0",

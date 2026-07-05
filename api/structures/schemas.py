@@ -136,6 +136,10 @@ class VoiceCloneRequest(BaseModel):
         le=4.0,
         description="The speed of the generated audio. Select a value from 0.25 to 4.0.",
     )
+    stream: bool = Field(
+        default=False,
+        description="If True, return audio as a streaming response.",
+    )
     normalization_options: Optional[NormalizationOptions] = Field(
         default_factory=NormalizationOptions,
         description="Options for the text normalization system",

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from api.backends.factory import get_backend, reset_backend
 from api.backends.base import TTSBackend
+from api.backends.faster_qwen3_tts import FasterQwen3TTSBackend
 from api.backends.official_qwen3_tts import OfficialQwen3TTSBackend
 from api.backends.vllm_omni_qwen3_tts import VLLMOmniQwen3TTSBackend
 
@@ -54,6 +55,31 @@ class TestBackendSelection:
         assert isinstance(backend, VLLMOmniQwen3TTSBackend)
         assert backend.get_backend_name() == "vllm_omni"
     
+    def test_faster_backend_via_env(self, monkeypatch):
+        """Test selecting faster-qwen3-tts backend via environment variable."""
+        monkeypatch.setenv("TTS_BACKEND", "faster")
+
+        backend = get_backend()
+        assert isinstance(backend, FasterQwen3TTSBackend)
+        assert backend.get_backend_name() == "faster"
+
+    def test_faster_backend_alternate_names(self, monkeypatch):
+        """Test faster backend with alternate name formats."""
+        for name in ("faster-qwen3-tts", "faster_qwen3_tts"):
+            reset_backend()
+            monkeypatch.setenv("TTS_BACKEND", name)
+
+            backend = get_backend()
+            assert isinstance(backend, FasterQwen3TTSBackend)
+
+    def test_faster_backend_custom_model(self, monkeypatch):
+        """Test overriding model name for the faster backend."""
+        monkeypatch.setenv("TTS_BACKEND", "faster")
+        monkeypatch.setenv("TTS_MODEL_NAME", "Qwen/Qwen3-TTS-12Hz-1.7B-Base")
+
+        backend = get_backend()
+        assert backend.get_model_id() == "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+
     def test_invalid_backend_raises_error(self, monkeypatch):
         """Test that invalid backend name raises ValueError."""
         monkeypatch.setenv("TTS_BACKEND", "invalid_backend")
@@ -161,6 +187,71 @@ class TestBackendInterface:
         assert "gpu_available" in info1
         assert "device" in info2
         assert "gpu_available" in info2
+
+
+class TestFasterBackendInterface:
+    """Tests for the faster-qwen3-tts backend interface."""
+
+    def test_implements_interface(self):
+        """Test faster backend implements TTSBackend interface."""
+        backend = FasterQwen3TTSBackend()
+
+        assert isinstance(backend, TTSBackend)
+        for method in (
+            'initialize', 'generate_speech', 'get_backend_name', 'get_model_id',
+            'get_supported_voices', 'get_supported_languages', 'is_ready',
+            'get_device_info', 'supports_voice_cloning', 'get_model_type',
+            'generate_voice_clone', 'supports_streaming',
+            'generate_speech_streaming', 'generate_voice_clone_streaming',
+        ):
+            assert hasattr(backend, method)
+
+    def test_initially_not_ready(self):
+        backend = FasterQwen3TTSBackend()
+        assert not backend.is_ready()
+
+    def test_returns_default_voices_and_languages_when_not_loaded(self):
+        backend = FasterQwen3TTSBackend()
+        assert len(backend.get_supported_voices()) > 0
+        assert len(backend.get_supported_languages()) > 0
+
+    def test_streaming_capability_flags(self):
+        """Only the faster backend advertises streaming."""
+        assert FasterQwen3TTSBackend().supports_streaming()
+        assert not OfficialQwen3TTSBackend().supports_streaming()
+        assert not VLLMOmniQwen3TTSBackend().supports_streaming()
+
+    def test_cloning_capability_matrix(self):
+        """Voice cloning follows the same model-name rules as other backends."""
+        base = FasterQwen3TTSBackend(model_name="Qwen/Qwen3-TTS-12Hz-1.7B-Base")
+        custom = FasterQwen3TTSBackend(model_name="Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice")
+        design = FasterQwen3TTSBackend(model_name="Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign")
+
+        assert base.supports_voice_cloning()
+        assert base.get_model_type() == "base"
+        assert not custom.supports_voice_cloning()
+        assert custom.get_model_type() == "customvoice"
+        assert not design.supports_voice_cloning()
+        assert design.get_model_type() == "voicedesign"
+
+    def test_chunk_size_from_env(self, monkeypatch):
+        monkeypatch.setenv("TTS_CHUNK_SIZE", "4")
+        assert FasterQwen3TTSBackend().chunk_size == 4
+
+    def test_invalid_chunk_size_falls_back_to_default(self, monkeypatch):
+        from api.backends.faster_qwen3_tts import DEFAULT_CHUNK_SIZE
+
+        monkeypatch.setenv("TTS_CHUNK_SIZE", "not-a-number")
+        assert FasterQwen3TTSBackend().chunk_size == DEFAULT_CHUNK_SIZE
+
+        monkeypatch.setenv("TTS_CHUNK_SIZE", "0")
+        assert FasterQwen3TTSBackend().chunk_size == DEFAULT_CHUNK_SIZE
+
+    def test_streaming_not_supported_on_other_backends(self):
+        """Base-class default raises NotImplementedError."""
+        backend = OfficialQwen3TTSBackend()
+        with pytest.raises(NotImplementedError):
+            backend.generate_speech_streaming(text="hi", voice="Vivian")
 
 
 class TestVoiceCloningInterface:

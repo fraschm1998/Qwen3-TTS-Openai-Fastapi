@@ -5,7 +5,7 @@ Base class for TTS backends.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple, List, Dict, Any
+from typing import AsyncIterator, Optional, Tuple, List, Dict, Any
 import numpy as np
 
 
@@ -88,6 +88,53 @@ class TTSBackend(ABC):
             Dict with keys: device, gpu_available, gpu_name, vram_total, vram_used
         """
         pass
+
+    def supports_streaming(self) -> bool:
+        """
+        Return whether the backend supports incremental (chunked) generation.
+
+        Streaming backends yield audio chunks as they are decoded, giving
+        time-to-first-audio far below full-generation latency.
+
+        Returns:
+            True if generate_speech_streaming / generate_voice_clone_streaming
+            are implemented, False otherwise
+        """
+        return False
+
+    def generate_speech_streaming(
+        self,
+        text: str,
+        voice: str,
+        language: str = "Auto",
+        instruct: Optional[str] = None,
+    ) -> AsyncIterator[Tuple[np.ndarray, int]]:
+        """
+        Incrementally generate speech, yielding (audio_chunk, sample_rate)
+        tuples as audio is decoded.
+
+        Raises:
+            NotImplementedError: If streaming is not supported by this backend
+        """
+        raise NotImplementedError("Streaming is not supported by this backend")
+
+    def generate_voice_clone_streaming(
+        self,
+        text: str,
+        ref_audio: np.ndarray,
+        ref_audio_sr: int,
+        ref_text: Optional[str] = None,
+        language: str = "Auto",
+        x_vector_only_mode: bool = False,
+    ) -> AsyncIterator[Tuple[np.ndarray, int]]:
+        """
+        Incrementally generate voice-cloned speech, yielding
+        (audio_chunk, sample_rate) tuples as audio is decoded.
+
+        Raises:
+            NotImplementedError: If streaming is not supported by this backend
+        """
+        raise NotImplementedError("Streaming is not supported by this backend")
 
     def supports_voice_cloning(self) -> bool:
         """

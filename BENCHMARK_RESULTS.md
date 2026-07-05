@@ -1,5 +1,12 @@
 # Qwen3-TTS Performance Benchmark Results
 
+> **Pending**: the `faster` backend (faster-qwen3-tts, CUDA graphs — now the
+> compose default) has not been benchmarked on the RTX 3090 yet. Upstream
+> reports ~5x RTF / TTFA improvement over the official baseline on RTX 4090.
+> Re-run `bench_tts.py` against a `TTS_BACKEND=faster` instance and record
+> results here, including an audio-quality A/B against the official backend
+> (CUDA-graph static-cache output is not bit-identical).
+
 ## Test Configuration
 
 - **Date**: January 25, 2026

@@ -7,8 +7,9 @@ Core speech generation logic used by both the OpenAI-compatible router
 and the async job system.
 """
 
+import contextlib
 import logging
-from typing import Callable, Optional
+from typing import AsyncIterator, Callable, Optional
 
 import numpy as np
 
@@ -156,3 +157,50 @@ async def generate_speech_chunked(
 
     combined_audio = np.concatenate(audio_segments)
     return combined_audio, sample_rate
+
+
+async def generate_speech_streaming(
+    text: str,
+    voice: str,
+    language: str = "Auto",
+    instruct: Optional[str] = None,
+) -> AsyncIterator[tuple[np.ndarray, int]]:
+    """
+    Incrementally generate speech, yielding (audio_chunk, sample_rate)
+    tuples as the backend decodes audio.
+
+    Long text is split at sentence boundaries and streamed chunk-by-chunk
+    sequentially, with the same silence gaps generate_speech_chunked()
+    inserts. Requires a backend where supports_streaming() is True.
+
+    Note: this path intentionally bypasses the JobManager priority queue —
+    the backend serializes GPU access itself, and a live stream cannot be
+    queued without destroying its latency benefit.
+    """
+    backend = await get_tts_backend()
+    voice_name = get_voice_name(voice)
+    text_chunks = split_into_chunks(text)
+
+    for i, text_chunk in enumerate(text_chunks):
+        chunk_sr: int | None = None
+
+        # aclosing ensures the backend generator (and its GPU lock) is
+        # released promptly if the consumer disconnects mid-stream.
+        async with contextlib.aclosing(
+            backend.generate_speech_streaming(
+                text=text_chunk,
+                voice=voice_name,
+                language=language,
+                instruct=instruct,
+            )
+        ) as stream:
+            async for audio_chunk, sr in stream:
+                chunk_sr = sr
+                yield audio_chunk, sr
+
+        # Silence gap between text chunks (not after the last one)
+        if i < len(text_chunks) - 1 and chunk_sr:
+            silence = np.zeros(
+                int(chunk_sr * SILENCE_DURATION_SECONDS), dtype=np.float32
+            )
+            yield silence, chunk_sr

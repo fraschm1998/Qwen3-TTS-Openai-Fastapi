@@ -55,3 +55,11 @@ run-vllm:
 # Start CPU-only backend
 run-cpu:
     docker compose --profile cpu up -d qwen3-tts-cpu
+
+# Start voice-clone instance (faster backend + Base model, port 8885)
+run-clone:
+    docker compose --profile clone up -d qwen3-tts-clone
+
+# Start N replicas on the previous (official) backend — rollback path
+run-official n="2":
+    TTS_BACKEND=official just run {{n}}

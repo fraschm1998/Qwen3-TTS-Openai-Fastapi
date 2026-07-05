@@ -66,15 +66,20 @@ WORKDIR /build
 COPY pyproject.toml README.md ./
 
 # 1. Install CUDA torch first (from PyTorch index, not PyPI)
+#    torch>=2.5.1 is required: CUDA graph capture (faster backend) is
+#    unreliable on older versions.
 RUN pip install --no-cache-dir \
-    torch \
+    "torch>=2.5.1" \
     torchaudio \
     --index-url https://download.pytorch.org/whl/cu121
 
 # 2. Install all deps from pyproject.toml — pip sees torch already satisfied
-#    Use onnxruntime-gpu instead of onnxruntime for CUDA support
+#    Use onnxruntime-gpu instead of onnxruntime for CUDA support.
+#    [faster] pulls faster-qwen3-tts; its qwen-tts>=0.1.1 requirement is
+#    satisfied by this package (version 0.1.1+fieri), so the PyPI qwen-tts
+#    is NOT pulled in (it would clobber the vendored fork).
 RUN pip install --no-cache-dir onnxruntime-gpu && \
-    pip install --no-cache-dir ".[api]"
+    pip install --no-cache-dir ".[api,faster]"
 
 # 3. Compile flash-attention (requires CUDA dev tools)
 RUN pip install --no-cache-dir flash-attn --no-build-isolation

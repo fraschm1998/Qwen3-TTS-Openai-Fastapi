@@ -9,6 +9,7 @@ import logging
 from typing import Optional
 
 from .base import TTSBackend
+from .faster_qwen3_tts import FasterQwen3TTSBackend
 from .official_qwen3_tts import OfficialQwen3TTSBackend
 from .vllm_omni_qwen3_tts import VLLMOmniQwen3TTSBackend
 
@@ -24,8 +25,9 @@ def get_backend() -> TTSBackend:
     
     The backend is selected based on the TTS_BACKEND environment variable:
     - "official" (default): Use official Qwen3-TTS implementation
+    - "faster": Use faster-qwen3-tts (CUDA graphs, GPU only, supports streaming)
     - "vllm_omni": Use vLLM-Omni for faster inference
-    
+
     Returns:
         TTSBackend instance
     """
@@ -52,6 +54,15 @@ def get_backend() -> TTSBackend:
         
         logger.info(f"Using official Qwen3-TTS backend with model: {_backend_instance.get_model_id()}")
     
+    elif backend_type in ("faster", "faster-qwen3-tts", "faster_qwen3_tts"):
+        # faster-qwen3-tts backend (CUDA graphs)
+        if model_name:
+            _backend_instance = FasterQwen3TTSBackend(model_name=model_name)
+        else:
+            _backend_instance = FasterQwen3TTSBackend()
+
+        logger.info(f"Using faster-qwen3-tts backend with model: {_backend_instance.get_model_id()}")
+
     elif backend_type == "vllm_omni" or backend_type == "vllm-omni" or backend_type == "vllm":
         # vLLM-Omni backend
         stage_configs_path = os.getenv("VLLM_STAGE_CONFIGS_PATH")
@@ -68,7 +79,7 @@ def get_backend() -> TTSBackend:
         logger.error(f"Unknown backend type: {backend_type}")
         raise ValueError(
             f"Unknown TTS_BACKEND: {backend_type}. "
-            f"Supported values: 'official', 'vllm_omni'"
+            f"Supported values: 'official', 'faster', 'vllm_omni'"
         )
     
     return _backend_instance
