@@ -8,11 +8,16 @@ services:
     image: nginx:alpine
     container_name: qwen3-tts-lb
     network_mode: host
+    environment:
+      # LB listen port. Override when 8880 is taken on the host
+      # (e.g. LB_PORT=8890 on epyc where kokoro owns 8880).
+      - LB_PORT=${LB_PORT:-8880}
     volumes:
-      - ./config/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # templates/ dir: nginx entrypoint runs envsubst on *.template files
+      - ./config/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8880/health"]
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:$${LB_PORT}/health"]
       interval: 30s
       timeout: 10s
       retries: 3

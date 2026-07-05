@@ -7,7 +7,9 @@ upstream tts_backends {
 }
 
 server {
-    listen 8880;
+    # Substituted by nginx's envsubst at container start (LB_PORT env var).
+    # Default 8880; override when the port is taken (e.g. kokoro on epyc).
+    listen ${LB_PORT};
 
     client_max_body_size 100M;
 

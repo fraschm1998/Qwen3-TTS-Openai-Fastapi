@@ -1,7 +1,12 @@
 # Default host for benchmarks
 host := "localhost"
 
-# Start N replicas behind nginx (1-4)
+# Start N replicas behind nginx (1-4).
+# Replicas listen on 8881-8884; nginx LB on ${LB_PORT:-8880}.
+# Backend: ${TTS_BACKEND:-faster}. Examples:
+#   just run 2                       # 2 faster replicas, LB on 8880
+#   LB_PORT=8890 just run 1          # LB on 8890 (epyc: kokoro owns 8880)
+#   TTS_BACKEND=official just run 2  # rollback to official backend
 run n="2":
     #!/usr/bin/env bash
     set -euo pipefail
